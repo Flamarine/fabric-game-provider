@@ -4,5 +4,7 @@
 !/src/
 !/build.gradle
 !/gradle.properties
+!/LICENSE
+!/README.md
 !/settings.gradle
 !/.gitignore

@@ -38,6 +38,7 @@ tasks.withType(Test).configureEach {it.enabled = false}
 		tasks.build.dependsOn(this)
 		it.archiveClassifier = set.name
 		it.from(sourceSets.client.output)
+		it.from(file("LICENSE"))
 	}
 }
 
@@ -56,7 +57,7 @@ java {
 
 publishing {
 	publications { pubContainer ->
-        create("mavenJava", MavenPublication) { publication ->
+        pubContainer.create("mavenJava", MavenPublication) { publication ->
             publication.artifactId = "FabricGameProvider"
             publication.version = project.version
             publication.artifact(tasks["clientJar"])
