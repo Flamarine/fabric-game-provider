@@ -1,0 +1,78 @@
+plugins {
+	id("java-library")
+	id("maven-publish")
+}
+
+group = "net.betterthanadventure"
+base.archivesName = "FabricGameProvider"
+version = project.version
+
+repositories {
+	mavenCentral()
+	maven {
+		url = "https://maven.fabricmc.net"
+		name = "FabricMC"
+	}
+}
+
+sourceSets {
+	main
+
+	client.compileClasspath += main.output
+	server.compileClasspath += main.output
+}
+
+dependencies {
+	clientImplementation("net.fabricmc:fabric-loader:${project.fabric_loader_version}")
+	serverImplementation("net.fabricmc:fabric-loader:${project.fabric_loader_version}")
+}
+
+tasks.withType(Jar).configureEach {it.enabled = false}
+
+tasks.withType(Test).configureEach {it.enabled = false}
+
+[sourceSets.client, sourceSets.server].forEach { set ->
+	tasks.register("${set.name}Jar", Jar) {
+		it.enabled = true
+		it.group = "build"
+		tasks.build.dependsOn(this)
+		it.archiveClassifier = set.name
+		it.from(sourceSets.client.output)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.encoding = "UTF-8"
+
+	if (JavaVersion.current().isJava9Compatible()) {
+		it.options.release = 8
+	}
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_1_8
+	targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+publishing {
+	publications { pubContainer ->
+        create("mavenJava", MavenPublication) { publication ->
+            publication.artifactId = "FabricGameProvider"
+            publication.version = project.version
+            publication.artifact(tasks["clientJar"])
+            publication.artifact(tasks["serverJar"])
+            publication.pom.withXml {
+                Node provider = it.asNode()
+                def deps = provider.get("dependencies")
+                if (deps != null || deps.isEmpty()) {
+					deps = provider.appendNode("dependencies") as Node
+				}
+                Node fabricDependency = deps.appendNode("dependency")
+                fabricDependency.appendNode("groupId", "net.fabricmc")
+                fabricDependency.appendNode("artifactId", "fabric-loader")
+                fabricDependency.appendNode("version", fabric_loader_version)
+                fabricDependency.appendNode("scope", "compile")
+            }
+        }
+	}
+}
