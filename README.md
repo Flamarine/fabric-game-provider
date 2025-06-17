@@ -1,6 +1,6 @@
 # Better Than Adventure Game Provider
 
-This Fabric Game Provider directly launches the game via stubbed classes.
+～～This Fabric Game Provider directly launches the game via stubbed classes.～～ well not really, i ended up using the same method as the default game provider as only in this way can the game actually be launched and load mods
 
 ## Stubs
 
