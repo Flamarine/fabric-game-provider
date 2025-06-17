@@ -16,6 +16,10 @@
 
 package net.betterthanadventure.fabric.provider;
 
+import java.io.IOException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -23,8 +27,10 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import net.fabricmc.api.EnvType;
+import net.fabricmc.loader.impl.FormattedException;
 import net.fabricmc.loader.impl.game.GameProvider;
 import net.fabricmc.loader.impl.game.GameProviderHelper;
+import net.fabricmc.loader.impl.game.LibClassifier;
 import net.fabricmc.loader.impl.game.minecraft.Hooks;
 import net.fabricmc.loader.impl.game.patch.GamePatch;
 import net.fabricmc.loader.impl.game.patch.GameTransformer;
@@ -32,9 +38,11 @@ import net.fabricmc.loader.impl.launch.FabricLauncher;
 import net.fabricmc.loader.impl.metadata.BuiltinModMetadata;
 import net.fabricmc.loader.impl.util.Arguments;
 import net.fabricmc.loader.impl.util.LoaderUtil;
+import net.fabricmc.loader.impl.util.SystemProperties;
 import net.fabricmc.loader.impl.util.log.Log;
 import net.fabricmc.loader.impl.util.log.LogCategory;
 import net.fabricmc.loader.impl.util.log.LogHandler;
+import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.*;
@@ -43,8 +51,10 @@ import org.objectweb.asm.tree.*;
  * Launches {@link MinecraftServer#main(String[])}
  */
 public class NMSMinecraftServerGameProvider implements GameProvider {
-	private       Arguments  arguments;
+	private Arguments arguments;
+	private Collection<Path> validParentClassPath;
 	private final List<Path> gameJars = new ArrayList<>();
+	private final Set<Path> logJars = new HashSet<>();
 
 	private final GameTransformer transformer = new GameTransformer(new GamePatch() {
 		@Override
@@ -79,7 +89,7 @@ public class NMSMinecraftServerGameProvider implements GameProvider {
 							Opcodes.INVOKESTATIC,
 							Hooks.INTERNAL_NAME,
 							"startServer",
-							"(Ljava/io/File;Ljava/lang/Object)V",
+							"(Ljava/io/File;Ljava/lang/Object;)V",
 							false
 					));
 					classEmitter.accept(mainClass);
@@ -119,14 +129,9 @@ public class NMSMinecraftServerGameProvider implements GameProvider {
 		return Collections.singletonList(new BuiltinMod(gameJars, metadata.build()));
 	}
 
-	public Path getGameJar() {
-		if (gameJars.isEmpty()) return null;
-		return gameJars.get(gameJars.size() - 1);
-	}
-
 	@Override
 	public String getEntrypoint() {
-		return MinecraftServer.class.getName() + ".class";
+		return MinecraftServer.class.getName();
 	}
 
 	@Override
@@ -155,21 +160,46 @@ public class NMSMinecraftServerGameProvider implements GameProvider {
 
 	@Override
 	public boolean locateGame(FabricLauncher launcher, String[] args) {
-		assert (EnvType.CLIENT == launcher.getEnvironmentType());
+		EnvType envType = launcher.getEnvironmentType();
+		assert (envType == EnvType.SERVER);
 
 		this.arguments = new Arguments();
 		arguments.parse(args);
 		processArgumentMap(arguments);
 
-		Path envJar = GameProviderHelper.getEnvGameJar(EnvType.CLIENT);
+		Path envJar = GameProviderHelper.getEnvGameJar(envType);
 		if (envJar != null) gameJars.add(envJar);
 
 		Path commonJar = GameProviderHelper.getCommonGameJar();
 		if (commonJar != null) gameJars.add(commonJar);
 
 		try {
+			LibClassifier<LogLibrary> classifier = new LibClassifier<>(LogLibrary.class, envType, this);
+			if (envJar != null) classifier.process(envJar);
+			if (commonJar != null) classifier.process(commonJar);
+			classifier.process(launcher.getClassPath());
+
+			boolean log4jAvailable = classifier.has(LogLibrary.LOG4J_API) && classifier.has(LogLibrary.LOG4J_CORE);
+			boolean slf4jAvailable = classifier.has(LogLibrary.SLF4J_API) && classifier.has(LogLibrary.SLF4J_CORE);
+			boolean hasLogLib = log4jAvailable || slf4jAvailable;
+
+			Log.configureBuiltin(hasLogLib, !hasLogLib);
+
+			for (LogLibrary lib: SharedConstants.LOGGING) {
+				Path path = classifier.getOrigin(lib);
+				if (path != null && hasLogLib) {
+					logJars.add(path);
+				}
+			}
+
+			validParentClassPath = classifier.getSystemLibraries();
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+
+		try {
 			if (gameJars.isEmpty()) {
-				Path jarOf = Paths.get(MinecraftServer.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+				Path jarOf = Paths.get(Minecraft.class.getProtectionDomain().getCodeSource().getLocation().toURI());
 				gameJars.add(jarOf);
 			}
 		} catch (Exception ignored) {
@@ -205,8 +235,19 @@ public class NMSMinecraftServerGameProvider implements GameProvider {
 
 	@Override
 	public void initialize(FabricLauncher launcher) {
-		setupLogHandler(launcher);
+		launcher.setValidParentClassPath(validParentClassPath);
 
+		if (!logJars.isEmpty() && !Boolean.getBoolean(SystemProperties.UNIT_TEST)) {
+			for (Path jar : logJars) {
+				if (gameJars.contains(jar)) {
+					launcher.addToClassPath(jar, SharedConstants.ALLOWED_EARLY_CLASS_PREFIXES);
+				} else {
+					launcher.addToClassPath(jar);
+				}
+			}
+		}
+
+		setupLogHandler(launcher);
 		if (!gameJars.isEmpty()) transformer.locateEntrypoints(launcher, gameJars);
 	}
 
@@ -267,11 +308,31 @@ public class NMSMinecraftServerGameProvider implements GameProvider {
 
 	@Override
 	public void unlockClassPath(FabricLauncher launcher) {
-		launcher.addToClassPath(getGameJar());
+		for (Path gameJar : gameJars) {
+			if (logJars.contains(gameJar)) {
+				launcher.setAllowedPrefixes(gameJar);
+			} else {
+				launcher.addToClassPath(gameJar);
+			}
+		}
 	}
 
 	@Override
 	public void launch(ClassLoader loader) {
-		MinecraftServer.main(arguments.toArray());
+		String targetClass = getEntrypoint();
+		MethodHandle invoker;
+
+		try {
+			Class<?> c = loader.loadClass(targetClass);
+			invoker = MethodHandles.lookup().findStatic(c, "main", MethodType.methodType(void.class, String[].class));
+		} catch (NoSuchMethodException | IllegalAccessException | ClassNotFoundException e) {
+			throw FormattedException.ofLocalized("exception.minecraft.invokeFailure", e);
+		}
+
+		try {
+			invoker.invokeExact(arguments.toArray());
+		} catch (Throwable t) {
+			throw FormattedException.ofLocalized("exception.minecraft.generic", t);
+		}
 	}
 }

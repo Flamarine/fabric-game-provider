@@ -17,9 +17,10 @@ repositories {
 
 sourceSets {
 	main
+	common
 
-	client.compileClasspath += main.output
-	server.compileClasspath += main.output
+	client.compileClasspath += main.output + common.output
+	server.compileClasspath += main.output + common.output
 }
 
 dependencies {
@@ -37,6 +38,15 @@ sourceSets.all { sourceSet ->
 	compileConfig.extendsFrom(configurations.implementation)
 }
 
+sourceSets.common { sourceSet ->
+	def compileConfig = configurations[sourceSet.compileClasspathConfigurationName]
+	compileConfig.extendsFrom(
+			configurations.implementation,
+			configurations.clientImplementation,
+			configurations.serverImplementation
+	)
+}
+
 tasks.withType(Jar).configureEach {it.enabled = false}
 
 tasks.withType(Test).configureEach {it.enabled = false}
@@ -47,7 +57,8 @@ tasks.withType(Test).configureEach {it.enabled = false}
 		it.group = "build"
 		tasks.build.dependsOn(this)
 		it.archiveClassifier = set.name
-		it.from(sourceSets.client.output)
+		it.from(set.output)
+		it.from(sourceSets.common.output)
 		it.from(file("LICENSE"))
 	}
 }
