@@ -1,10 +1,4 @@
 # Ignore everything
-/*
-
-!/src/
-!/build.gradle
-!/gradle.properties
-!/LICENSE
-!/README.md
-!/settings.gradle
-!/.gitignore
+.idea
+.gradle
+build

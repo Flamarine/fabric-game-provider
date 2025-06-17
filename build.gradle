@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "net.betterthanadventure"
-base.archivesName = "FabricGameProvider"
+base.archivesName = "fabric-game-provider-bta"
 version = project.version
 
 repositories {
@@ -23,8 +23,18 @@ sourceSets {
 }
 
 dependencies {
+	implementation("org.ow2.asm:asm:${project.asm_version}")
+	implementation("org.ow2.asm:asm-analysis:${project.asm_version}")
+	implementation("org.ow2.asm:asm-commons:${project.asm_version}")
+	implementation("org.ow2.asm:asm-tree:${project.asm_version}")
+	implementation("org.ow2.asm:asm-util:${project.asm_version}")
 	clientImplementation("net.fabricmc:fabric-loader:${project.fabric_loader_version}")
 	serverImplementation("net.fabricmc:fabric-loader:${project.fabric_loader_version}")
+}
+
+sourceSets.all { sourceSet ->
+	def compileConfig = configurations[sourceSet.compileClasspathConfigurationName]
+	compileConfig.extendsFrom(configurations.implementation)
 }
 
 tasks.withType(Jar).configureEach {it.enabled = false}
@@ -58,7 +68,7 @@ java {
 publishing {
 	publications { pubContainer ->
         pubContainer.create("mavenJava", MavenPublication) { publication ->
-            publication.artifactId = "FabricGameProvider"
+            publication.artifactId = "fabric-game-provider-bta"
             publication.version = project.version
             publication.artifact(tasks["clientJar"])
             publication.artifact(tasks["serverJar"])

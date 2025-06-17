@@ -18,24 +18,27 @@ package net.betterthanadventure.fabric.provider;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import net.fabricmc.api.EnvType;
 import net.fabricmc.loader.impl.game.GameProvider;
 import net.fabricmc.loader.impl.game.GameProviderHelper;
+import net.fabricmc.loader.impl.game.minecraft.Hooks;
 import net.fabricmc.loader.impl.game.minecraft.patch.BrandingPatch;
+import net.fabricmc.loader.impl.game.patch.GamePatch;
 import net.fabricmc.loader.impl.game.patch.GameTransformer;
 import net.fabricmc.loader.impl.launch.FabricLauncher;
 import net.fabricmc.loader.impl.metadata.BuiltinModMetadata;
 import net.fabricmc.loader.impl.util.Arguments;
 import net.fabricmc.loader.impl.util.LoaderUtil;
 import net.fabricmc.loader.impl.util.log.Log;
+import net.fabricmc.loader.impl.util.log.LogCategory;
 import net.fabricmc.loader.impl.util.log.LogHandler;
 import net.minecraft.server.MinecraftServer;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.*;
 
 /**
  * Launches {@link MinecraftServer#main(String[])}
@@ -44,20 +47,61 @@ public class NMSMinecraftServerGameProvider implements GameProvider {
 	private       Arguments  arguments;
 	private final List<Path> gameJars = new ArrayList<>();
 
-	private final GameTransformer transformer = new GameTransformer(new BrandingPatch());
+	private final GameTransformer transformer = new GameTransformer(new GamePatch() {
+		@Override
+		public void process(FabricLauncher launcher, Function<String, ClassNode> classSource, Consumer<ClassNode> classEmitter) {
+			String entrypoint = launcher.getEntrypoint();
+			if (!entrypoint.startsWith("net.minecraft.")) {
+				return;
+			}
+
+			ClassNode mainClass = classSource.apply(entrypoint);
+			if (mainClass == null) {
+				throw new RuntimeException("Could not load main class " + entrypoint + "!");
+			}
+
+			for (MethodNode method : mainClass.methods) {
+				if (method.name.equals("startServer") && method.desc.equals("()Z")) {
+					Log.debug(LogCategory.GAME_PATCH, "Applying entrypoint hook to %s::%s", mainClass.name, method.name);
+
+					ListIterator<AbstractInsnNode> instructions = method.instructions.iterator();
+
+					// inject at the head of startServer()
+					instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+					instructions.add(new MethodInsnNode(
+							Opcodes.INVOKESPECIAL,
+							"net/minecraft/server/MinecraftServer",
+							"getMinecraftDir",
+							"()Ljava/io/File;",
+							false
+					));
+					instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+					instructions.add(new MethodInsnNode(
+							Opcodes.INVOKESTATIC,
+							Hooks.INTERNAL_NAME,
+							"startServer",
+							"(Ljava/io/File;Ljava/lang/Object)V",
+							false
+					));
+					classEmitter.accept(mainClass);
+					break;
+				}
+			}
+		}
+	});
 
 	/**
-	 * Simply "bta" is too short for a mod ID. We'll treat it as a subtitle.
-	 * @return "minecraft-bta"
+	 * Still provides <code>minecraft</code> for backward compatibility.
+	 * @return "minecraft"
 	 */
 	@Override
 	public String getGameId() {
-		return "minecraft-bta";
+		return "minecraft";
 	}
 
 	@Override
 	public String getGameName() {
-		return "Minecraft: Better Than Adventure";
+		return "Better Than Adventure!";
 	}
 
 	@Override
